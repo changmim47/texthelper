@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     polishBtn.innerText = "⏳ 다듬는 중...";
 
     try {
-      const response = await fetch('https://texthelper.onrender.com', { // ✅ 포트 8502 추가 완료
+      const response = await fetch('https://texthelper.onrender.com/polish-text', { // ✅ 포트 8502 추가 완료
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

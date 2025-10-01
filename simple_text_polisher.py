@@ -123,8 +123,9 @@ async def polish_text_resp_endpoint(request: Request):
 @app.post("/polish-text-stream")
 async def polish_text_stream_endpoint(request: Request):
     """
-    Responses API를 사용하는 스트리밍 엔드포인트.
-    텍스트 델타를 수신 즉시 클라이언트로 전송합니다.
+    Responses API 스트리밍 엔드포인트 (수정판)
+    - contextlib.closing 제거
+    - 예외/클라이언트 끊김 처리 보강
     """
     try:
         body = await request.json()
@@ -133,23 +134,30 @@ async def polish_text_stream_endpoint(request: Request):
             return JSONResponse({"error": "텍스트를 입력해 주세요."}, status_code=400)
 
         def generate():
-            with closing(client.responses.stream(
-                model="o4-mini",
-                input=build_messages(raw_text),
-                temperature=0.2,
-                max_output_tokens=512,
-            )) as stream:
-                for event in stream:
-                    # 텍스트가 생성될 때마다 델타를 흘려보냄
-                    if event.type == "response.output_text.delta":
-                        yield event.delta
-                    elif event.type == "response.error":
-                        # 에러 이벤트가 오면 중단
-                        yield f"\n[ERROR] {getattr(event, 'error', 'unknown error')}"
-                        break
-                    elif event.type == "response.completed":
-                        # 완료 이벤트에서 종료
-                        break
+            try:
+                # ❌ with closing(...) X
+                # ✅ 컨텍스트 매니저 그대로 사용
+                with client.responses.stream(
+                    model="o4-mini",                     # 필요 시 gpt-4o-mini로 교체 가능
+                    input=build_messages(raw_text),
+                    temperature=0.2,
+                    max_output_tokens=512,
+                ) as stream:
+                    for event in stream:
+                        if event.type == "response.output_text.delta":
+                            # Starlette는 str/bytes 모두 허용. utf-8 텍스트 스트림으로 흘려보냄
+                            yield event.delta
+                        elif event.type == "response.error":
+                            yield f"\n[ERROR] {getattr(event, 'error', 'unknown error')}"
+                            break
+                        elif event.type == "response.completed":
+                            break
+            except GeneratorExit:
+                # 클라이언트가 중간에 연결 끊었을 때(브라우저 탭 닫힘 등)
+                return
+            except Exception as e:
+                # 서버 내부 오류를 스트림 끝부분에 표시(로그도 남기길 권장)
+                yield f"\n[SERVER ERROR] {str(e)}"
 
         return StreamingResponse(generate(), media_type="text/plain; charset=utf-8")
 

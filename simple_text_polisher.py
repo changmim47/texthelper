@@ -43,7 +43,7 @@ def health():
     return {"status": "healthy"}
 
 # =========================
-# 공통 프롬프트/메시지 빌드 (Responses/Chat 공용)
+# 공통 규칙(프롬프트)
 # =========================
 SYSTEM_PROMPT = (
     "너는 전문 CS 상담사야. 친절하고 신뢰감 있는 답변 스타일로 내용을 정리해줘. "
@@ -51,13 +51,21 @@ SYSTEM_PROMPT = (
     "가능하면 원문과 유사한 길이와 형식을 유지해."
 )
 
-def build_messages(raw_text: str):
-    """
-    Responses API에 안전한 구조화 포맷 + Chat Completions와도 호환되는 메시지.
-    """
+# =========================
+# 메시지 빌더 (두 API용 분리)
+# =========================
+def build_messages_chat(raw_text: str):
+    """Chat Completions용 (content는 문자열 사용)"""
     return [
-        {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
-        {"role": "user",   "content": [{"type": "text", "text": f"[원문]\n{raw_text}\n\n[교정된 문장]"}]},
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"[원문]\n{raw_text}\n\n[교정된 문장]"},
+    ]
+
+def build_messages_responses(raw_text: str):
+    """Responses API용 (content[].type='input_text')"""
+    return [
+        {"role": "system", "content": [{"type": "input_text", "text": SYSTEM_PROMPT}]},
+        {"role": "user",   "content": [{"type": "input_text", "text": f"[원문]\n{raw_text}\n\n[교정된 문장]"}]},
     ]
 
 # =========================
@@ -66,7 +74,7 @@ def build_messages(raw_text: str):
 def polish_text_chat(raw_text: str) -> str:
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=build_messages(raw_text),  # 공통 메시지 사용
+        messages=build_messages_chat(raw_text),
         temperature=0.2,
         # 필요 시 max_tokens 지정 가능
     )
@@ -74,9 +82,7 @@ def polish_text_chat(raw_text: str) -> str:
 
 @app.post("/polish-text")
 async def polish_text_endpoint(request: Request):
-    """
-    기존 엔드포인트(호환성 유지). Chat Completions 사용.
-    """
+    """기존 엔드포인트(호환성 유지). Chat Completions 사용."""
     try:
         body = await request.json()
         raw_text = (body.get("text") or "").strip()
@@ -101,7 +107,6 @@ def extract_output_text(resp) -> str:
     if text:
         return text.strip()
 
-    # 폴백 파서
     try:
         parts = []
         for item in getattr(resp, "output", []) or []:
@@ -126,8 +131,8 @@ def polish_text_responses(raw_text: str, *, model: str = "o4-mini", max_output_t
     """
     resp = client.responses.create(
         model=model,
-        input=build_messages(raw_text),
-        max_output_tokens=max_output_tokens,  # 출력 토큰 상한
+        input=build_messages_responses(raw_text),
+        max_output_tokens=max_output_tokens,
     )
     text = extract_output_text(resp)
     if not text:
@@ -136,9 +141,7 @@ def polish_text_responses(raw_text: str, *, model: str = "o4-mini", max_output_t
 
 @app.post("/polish-text-resp")
 async def polish_text_resp_endpoint(request: Request):
-    """
-    Responses API를 사용하는 비스트리밍 엔드포인트.
-    """
+    """Responses API를 사용하는 비스트리밍 엔드포인트."""
     try:
         body = await request.json()
         raw_text = (body.get("text") or "").strip()
@@ -170,14 +173,12 @@ async def polish_text_stream_endpoint(request: Request):
             try:
                 with client.responses.stream(
                     model="o4-mini",
-                    input=build_messages(raw_text),
+                    input=build_messages_responses(raw_text),
                     max_output_tokens=512,
                 ) as stream:
                     for event in stream:
-                        # 최신 이벤트 타입
                         if event.type == "response.output_text.delta":
                             yield event.delta
-                        # (호환) 일부 SDK/모델 조합에서 다른 *.delta 타입이 올 수 있어 안전 처리
                         elif event.type.endswith(".delta") and hasattr(event, "delta"):
                             yield event.delta
                         elif event.type == "response.error":

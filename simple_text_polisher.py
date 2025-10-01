@@ -101,25 +101,44 @@ def extract_output_text(resp) -> str:
     """
     Responses API 응답에서 텍스트를 안전하게 추출.
     - 최신 SDK: resp.output_text
-    - 폴백: resp.output[*] 순회
+    - dict 형태/구버전: resp["output"][*].content[*].text or resp["output"][*].text
+    - 객체형/딕셔너리형 모두 지원
     """
+    # 1) 우선 편의속성/키 시도
     text = getattr(resp, "output_text", None)
+    if not text and isinstance(resp, dict):
+        text = resp.get("output_text")
     if text:
         return text.strip()
 
-    try:
-        parts = []
-        for item in getattr(resp, "output", []) or []:
-            t = getattr(item, "type", None)
-            if t == "output_text" and hasattr(item, "text"):
-                parts.append(item.text)
-            elif t == "message":
-                for c in getattr(item, "content", []) or []:
-                    if isinstance(c, dict) and c.get("type") in ("output_text", "text"):
-                        parts.append(c.get("text", ""))
-        return "".join(parts).strip()
-    except Exception:
-        return ""
+    # 2) output 배열 파싱 (객체형/딕셔너리형 혼용 지원)
+    def _get(o, key, default=None):
+        return (o.get(key, default) if isinstance(o, dict) else getattr(o, key, default))
+
+    output = getattr(resp, "output", None)
+    if output is None and isinstance(resp, dict):
+        output = resp.get("output")
+
+    parts = []
+    if isinstance(output, list):
+        for item in output:
+            t = _get(item, "type")
+            # 형태 1: {"type":"output_text","text":"..."}
+            if t == "output_text":
+                txt = _get(item, "text", "")
+                if txt:
+                    parts.append(txt)
+                    continue
+            # 형태 2: {"type":"message","content":[{"type":"output_text","text":"..."}]}
+            if t == "message":
+                content = _get(item, "content", []) or []
+                for c in content:
+                    ct = _get(c, "type")
+                    if ct in ("output_text", "text"):  # 일부 조합에서 "text"로 들어오는 경우도 있음
+                        txt = _get(c, "text", "")
+                        if txt:
+                            parts.append(txt)
+    return "".join(parts).strip()
 
 # =========================
 # Responses API (비스트리밍)

@@ -4,21 +4,28 @@ import os
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAI
 from dotenv import load_dotenv
+from contextlib import closing
 
+# =========================
+# 환경설정 & OpenAI 클라이언트
+# =========================
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
     raise ValueError("OPENAI_API_KEY가 .env 파일에 설정되어 있지 않습니다.")
 client = OpenAI(api_key=openai_api_key)
 
+# =========================
+# FastAPI
+# =========================
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],   # 필요 시 특정 도메인으로 좁히세요.
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -31,36 +38,129 @@ def root():
 def health():
     return {"status": "healthy"}
 
-def polish_text(raw_text: str) -> str:
-    prompt = (
-        "아래 문장을 자연스럽고 정확한 한국어로 교정해 주세요.\n"
-        "- 맞춤법, 띄어쓰기, 오타, 문법 오류를 수정해 주세요.\n"
-        "- 어투는 공손하고 부드럽게 유지해 주세요.\n"
-        "- 전문 CS 상담사 마인드로, 친절하고 신뢰감 있는 답변 스타일로 다듬어 주세요.\n\n"
-        "[원문]\n"
-        f"{raw_text}\n\n"
-        "[교정된 문장]"
-    )
+# =========================
+# 공통 프롬프트/메시지 빌드
+# =========================
+SYSTEM_PROMPT = (
+    "아래 문장을 자연스럽고 정확한 한국어로 교정해 주세요. "
+    "맞춤법, 띄어쓰기, 오타, 문법 오류를 수정해 주세요, "
+    "어투는 공손하고 부드럽게 유지해 주세요. "
+    "전문 CS 상담사 마인드로, 친절하고 신뢰감 있는 답변 스타일로 다듬어 주세요"
+)
+
+def build_messages(raw_text: str):
+    """
+    Responses API에서 사용하는 메시지 형식.
+    """
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user",   "content": f"[원문]\n{raw_text}\n\n[교정된 문장]"}
+    ]
+
+# =========================
+# 기존: Chat Completions (호환용)
+# =========================
+def polish_text_chat(raw_text: str) -> str:
     resp = client.chat.completions.create(
-        model="gpt-4",  # 필요 시 최신 가용 모델로 교체 가능
-        messages=[{"role": "user", "content": prompt}],
+        model="gpt-4o-mini",
+        messages=build_messages(raw_text),
         temperature=0.2,
+        # 필요 시 max_tokens 추가 가능
     )
     return resp.choices[0].message.content.strip()
 
 @app.post("/polish-text")
 async def polish_text_endpoint(request: Request):
+    """
+    기존 엔드포인트(호환성 유지). Chat Completions 사용.
+    """
     try:
         body = await request.json()
-        raw_text = body.get("text")
-        if not raw_text or not raw_text.strip():
-            return JSONResponse(content={"error": "텍스트를 입력해 주세요."}, status_code=400)
-        polished = polish_text(raw_text)
-        return JSONResponse(content={"polished_text": polished})
+        raw_text = (body.get("text") or "").strip()
+        if not raw_text:
+            return JSONResponse({"error": "텍스트를 입력해 주세요."}, status_code=400)
+        polished = polish_text_chat(raw_text)
+        return JSONResponse({"polished_text": polished})
     except Exception as e:
-        return JSONResponse(content={"error": f"서버 오류: {str(e)}"}, status_code=500)
+        return JSONResponse({"error": f"서버 오류: {str(e)}"}, status_code=500)
 
+# =========================
+# 추가 1: Responses API (비스트리밍)
+# =========================
+def polish_text_responses(raw_text: str, *, model: str = "o4-mini", max_output_tokens: int = 512) -> str:
+    """
+    Responses API (비스트리밍) 버전.
+    """
+    resp = client.responses.create(
+        model=model,
+        input=build_messages(raw_text),
+        temperature=0.2,
+        max_output_tokens=max_output_tokens,  # 출력 토큰 상한
+    )
+    # Python SDK는 편의 속성으로 output_text 제공
+    return (resp.output_text or "").strip()
+
+@app.post("/polish-text-resp")
+async def polish_text_resp_endpoint(request: Request):
+    """
+    Responses API를 사용하는 비스트리밍 엔드포인트.
+    """
+    try:
+        body = await request.json()
+        raw_text = (body.get("text") or "").strip()
+        if not raw_text:
+            return JSONResponse({"error": "텍스트를 입력해 주세요."}, status_code=400)
+        polished = polish_text_responses(raw_text)
+        if not polished:
+            return JSONResponse({"error": "모델 응답이 비어 있습니다."}, status_code=500)
+        return JSONResponse({"polished_text": polished})
+    except Exception as e:
+        return JSONResponse({"error": f"서버 오류: {str(e)}"}, status_code=500)
+
+# =========================
+# 추가 2: Responses API (스트리밍)
+# =========================
+@app.post("/polish-text-stream")
+async def polish_text_stream_endpoint(request: Request):
+    """
+    Responses API를 사용하는 스트리밍 엔드포인트.
+    텍스트 델타를 수신 즉시 클라이언트로 전송합니다.
+    """
+    try:
+        body = await request.json()
+        raw_text = (body.get("text") or "").strip()
+        if not raw_text:
+            return JSONResponse({"error": "텍스트를 입력해 주세요."}, status_code=400)
+
+        def generate():
+            with closing(client.responses.stream(
+                model="o4-mini",
+                input=build_messages(raw_text),
+                temperature=0.2,
+                max_output_tokens=512,
+            )) as stream:
+                for event in stream:
+                    # 텍스트가 생성될 때마다 델타를 흘려보냄
+                    if event.type == "response.output_text.delta":
+                        yield event.delta
+                    elif event.type == "response.error":
+                        # 에러 이벤트가 오면 중단
+                        yield f"\n[ERROR] {getattr(event, 'error', 'unknown error')}"
+                        break
+                    elif event.type == "response.completed":
+                        # 완료 이벤트에서 종료
+                        break
+
+        return StreamingResponse(generate(), media_type="text/plain; charset=utf-8")
+
+    except Exception as e:
+        return JSONResponse({"error": f"서버 오류: {str(e)}"}, status_code=500)
+
+# =========================
+# 로컬 실행
+# =========================
 if __name__ == "__main__":
-    # 로컬 실행용 (Render에서는 Start Command로 uvicorn을 사용 권장)
+    # Render에서는 대시보드 Start Command에:
+    # uvicorn simple_text_polisher:app --host 0.0.0.0 --port $PORT
     port = int(os.getenv("PORT", "10000"))
     uvicorn.run("simple_text_polisher:app", host="0.0.0.0", port=port)

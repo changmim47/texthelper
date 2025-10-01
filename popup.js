@@ -13,9 +13,10 @@ document.addEventListener('DOMContentLoaded', () => {
     resultDiv.innerHTML = `
       <h3>📝 다듬어진 문장</h3>
       <textarea id="out" rows="10" cols="50" readonly></textarea>
-      <p style="font-size:12px;color:#666;">※ 생성 중입니다. (스트리밍)</p>
+      <p id="info" style="font-size:12px;color:#666;">※ 생성 중입니다. (스트리밍)</p>
     `;
     const out = document.getElementById('out');
+    const info = document.getElementById('info');
 
     try {
       const res = await fetch(`${BASE_URL}/polish-text-stream`, {
@@ -23,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
         signal: controller.signal,
+        cache: 'no-store',
       });
 
       if (!res.ok || !res.body) {
@@ -41,7 +43,19 @@ document.addEventListener('DOMContentLoaded', () => {
         out.scrollTop = out.scrollHeight;
       }
 
+      // ✅ 최종 flush (부분 유니코드 잔여 바이트 처리)
+      acc += decoder.decode();
+      out.value = acc;
+
       clearTimeout(timeout);
+
+      // ✅ 스트림에 서버 오류 텍스트가 섞여온 경우 폴백 유도
+      if (acc.includes('[SERVER ERROR]') || acc.includes('[ERROR]')) {
+        throw new Error(acc);
+      }
+
+      // 안내 문구 전환
+      if (info) info.textContent = '※ 텍스트를 드래그하여 복사할 수 있습니다.';
       return acc.trim();
     } catch (err) {
       clearTimeout(timeout);
@@ -54,6 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
+      cache: 'no-store',
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -74,10 +89,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       // 1) 스트리밍 우선
       const streamed = await streamPolish(inputText);
-      if (streamed) {
-        // 이미 textarea에 채워졌음. 추가 안내만 유지
-        return;
-      }
+      if (streamed) return;
+
       // 만약 streamed가 비어있다면 폴백
       throw new Error('빈 응답');
     } catch (_) {

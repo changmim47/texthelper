@@ -94,7 +94,6 @@ def polish_text_responses(raw_text: str, *, model: str = "o4-mini", max_output_t
     resp = client.responses.create(
         model=model,
         input=build_messages(raw_text),
-        temperature=0.2,
         max_output_tokens=max_output_tokens,  # 출력 토큰 상한
     )
     # Python SDK는 편의 속성으로 output_text 제공
@@ -140,7 +139,6 @@ async def polish_text_stream_endpoint(request: Request):
                 with client.responses.stream(
                     model="o4-mini",                     # 필요 시 gpt-4o-mini로 교체 가능
                     input=build_messages(raw_text),
-                    temperature=0.2,
                     max_output_tokens=512,
                 ) as stream:
                     for event in stream:

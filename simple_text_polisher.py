@@ -33,16 +33,17 @@ def health():
 
 def polish_text(raw_text: str) -> str:
     prompt = (
-        "아래 문장을 자연스럽고 정확한 한국어로 교정해 주세요.\n"
-        "- 맞춤법, 띄어쓰기, 오타, 문법 오류를 수정해 주세요.\n"
-        "- 어투는 공손하고 부드럽게 유지해 주세요.\n"
-        "- 전문 CS 상담사 마인드로, 친절하고 신뢰감 있는 답변 스타일로 다듬어 주세요.\n\n"
+        "너는 지금부터 전문 CS 상담원이 되는거야.\n"
+        "전문 CS 상담사 마인드로 아래의 문장을 다듬어줘야해.\n"
+        "문장을 다듬을 때에는 자연스럽고 정확한 한국어로 교정해줘\n"
+        "맞춤법, 띄어쓰기, 오타, 문법 오류를 수정해줘\n"
+        "톤앤매너를 지켜주고 문장은 간결하고 이해하기 쉽게 수정해줘\n\n"
         "[원문]\n"
         f"{raw_text}\n\n"
         "[교정된 문장]"
     )
     resp = client.chat.completions.create(
-        model="gpt-4o",  # ✅ 모델만 변경
+        model="GPT-4o mini",  # ✅ 모델만 변경
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
     )

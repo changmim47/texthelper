@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "메가공 답변 문장 다듬기 도우미",
+  "version": "1.2",
+  "description": "답변 텍스트를 GPT가 자연스럽고 정확하게 다듬어줍니다.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://43.201.98.57:8502/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://cs.megagong.net/erms/tool/answer.asp*"],
+      "js": ["content.js"]
+    }
+  ]
+}
